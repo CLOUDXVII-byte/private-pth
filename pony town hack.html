@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pony Town Support App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .resizable {
+            resize: both;
+            overflow: hidden;
+            border: 2px solid #4a5568;
+        }
+        #mapCanvas {
+            background-color: #2d3748;
+            cursor: crosshair;
+            border-radius: 0.5rem;
+        }
+        .btn {
+            @apply px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-75 transition-all duration-200;
+        }
+        .btn-secondary {
+            @apply bg-gray-600 hover:bg-gray-700 focus:ring-gray-500;
+        }
+        .btn-danger {
+            @apply bg-red-600 hover:bg-red-700 focus:ring-red-500;
+        }
+         .btn-active {
+            @apply ring-2 ring-amber-400 bg-indigo-800;
+        }
+    </style>
+     <link rel="preconnect" href="https://rsms.me/">
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
+</head>
+<body class="bg-gray-900 text-gray-200 flex flex-col md:flex-row h-screen p-4 gap-4">
+
+    <!-- Left Panel: Game Window -->
+    <div class="flex flex-col w-full md:w-2/3 h-1/2 md:h-full gap-4">
+        <h1 class="text-2xl font-bold text-center text-indigo-400">Pony Town</h1>
+        <div class="resizable w-full h-full bg-gray-800 rounded-lg shadow-2xl">
+            <iframe id="gameFrame" src="https://pony.town/" class="w-full h-full border-0"></iframe>
+        </div>
+        <div class="bg-gray-800 p-3 rounded-lg text-sm text-amber-300">
+             <p><strong class="font-bold text-amber-200">Disclaimer:</strong> This tool is for debug and simulation purposes only. It does not interact with, read, or automate any part of the Pony Town game. All actions must be performed manually by the user in the game window.</p>
+        </div>
+    </div>
+
+    <!-- Right Panel: Tracking Tools -->
+    <div class="flex flex-col w-full md:w-1/3 h-1/2 md:h-full bg-gray-800 p-4 rounded-lg shadow-2xl gap-4">
+        <h2 class="text-xl font-bold text-center text-indigo-400">Event Item Tracker</h2>
+        
+        <!-- Controls -->
+        <div class="grid grid-cols-2 gap-3">
+            <button id="setPlayerBtn" class="btn">Set Player</button>
+            <button id="setItemBtn" class="btn btn-secondary">Set Item</button>
+            <button id="togglePathBtn" class="btn btn-secondary">Start Path</button>
+            <button id="clearAllBtn" class="btn btn-danger">Clear All</button>
+        </div>
+
+        <!-- Canvas for Map -->
+        <div class="flex-grow w-full h-64 md:h-auto border-2 border-gray-600 rounded-lg">
+            <canvas id="mapCanvas"></canvas>
+        </div>
+        
+        <!-- Status -->
+        <div class="bg-gray-900 p-3 rounded-lg text-center">
+            <p class="font-mono text-sm">Status: <span id="statusText" class="font-bold text-green-400">Idle</span></p>
+            <p class="font-mono text-sm">Nearest Item: <span id="nearestItemText" class="font-bold text-cyan-400">N/A</span></p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mapCanvas');
+        const ctx = canvas.getContext('2d');
+        const parent = canvas.parentElement;
+
+        // UI Elements
+        const setPlayerBtn = document.getElementById('setPlayerBtn');
+        const setItemBtn = document.getElementById('setItemBtn');
+        const togglePathBtn = document.getElementById('togglePathBtn');
+        const clearAllBtn = document.getElementById('clearAllBtn');
+        const statusText = document.getElementById('statusText');
+        const nearestItemText = document.getElementById('nearestItemText');
+
+        let player = null;
+        let items = [];
+        let nearestItem = null;
+        let mode = 'player'; // 'player' or 'item'
+        let isPathing = false;
+        let pathUpdateInterval;
+
+        // --- Core Data Structures ---
+        class Point {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+            }
+        }
+
+        // --- Canvas & Drawing ---
+        function resizeCanvas() {
+            canvas.width = parent.clientWidth;
+            canvas.height = parent.clientHeight;
+            draw();
+        }
+
+        function drawGrid() {
+            const gridSize = 20;
+            ctx.strokeStyle = 'rgba(128, 128, 128, 0.2)';
+            for (let x = 0; x < canvas.width; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < canvas.height; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+        }
+
+        function drawPlayer() {
+            if (!player) return;
+            ctx.fillStyle = '#4ade80'; // Green
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#f0fdf4';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        function drawItems() {
+            items.forEach(item => {
+                ctx.fillStyle = '#facc15'; // Yellow
+                ctx.beginPath();
+                ctx.arc(item.x, item.y, 6, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+        
+        function drawPath() {
+            if (!isPathing || !player || !nearestItem) return;
+            ctx.beginPath();
+            ctx.moveTo(player.x, player.y);
+            ctx.lineTo(nearestItem.x, nearestItem.y);
+            ctx.strokeStyle = '#60a5fa'; // Blue
+            ctx.lineWidth = 3;
+            ctx.setLineDash([5, 5]);
+            ctx.stroke();
+            ctx.setLineDash([]); // Reset dash
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawGrid();
+            drawItems();
+            drawPlayer();
+            drawPath();
+        }
+        
+        // --- Logic ---
+        function getDistance(p1, p2) {
+            return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+        }
+
+        function findNearestItem() {
+            if (!player || items.length === 0) {
+                nearestItem = null;
+                nearestItemText.textContent = 'N/A';
+                return;
+            }
+
+            let minDist = Infinity;
+            let closest = null;
+            
+            items.forEach(item => {
+                const dist = getDistance(player, item);
+                if (dist < minDist) {
+                    minDist = dist;
+                    closest = item;
+                }
+            });
+            
+            nearestItem = closest;
+            if (nearestItem) {
+                nearestItemText.textContent = `(${Math.round(nearestItem.x)}, ${Math.round(nearestItem.y)})`;
+            } else {
+                 nearestItemText.textContent = 'N/A';
+            }
+        }
+        
+        function autoWalkStep() {
+            if (!isPathing || !player || !nearestItem) return;
+
+            const speed = 1.5;
+            const dist = getDistance(player, nearestItem);
+
+            if (dist < speed) {
+                // Arrived at item
+                player.x = nearestItem.x;
+                player.y = nearestItem.y;
+                items = items.filter(item => item !== nearestItem);
+                findNearestItem(); // Find the next one
+            } else {
+                // Move towards item
+                const angle = Math.atan2(nearestItem.y - player.y, nearestItem.x - player.x);
+                player.x += Math.cos(angle) * speed;
+                player.y += Math.sin(angle) * speed;
+            }
+            draw();
+        }
+
+
+        function updatePath() {
+            findNearestItem();
+            autoWalkStep();
+            draw();
+        }
+        
+        function startPathing() {
+            if (isPathing) return;
+            isPathing = true;
+            togglePathBtn.textContent = 'Stop Path';
+            togglePathBtn.classList.remove('btn-secondary');
+            statusText.textContent = 'Pathing Active';
+            statusText.classList.remove('text-green-400');
+            statusText.classList.add('text-amber-400');
+            pathUpdateInterval = setInterval(updatePath, 500);
+        }
+
+        function stopPathing() {
+            if (!isPathing) return;
+            isPathing = false;
+            clearInterval(pathUpdateInterval);
+            togglePathBtn.textContent = 'Start Path';
+            togglePathBtn.classList.add('btn-secondary');
+            statusText.textContent = 'Idle';
+            statusText.classList.remove('text-amber-400');
+            statusText.classList.add('text-green-400');
+            nearestItem = null; // Clear target when stopping
+            nearestItemText.textContent = 'N/A';
+            draw();
+        }
+
+        // --- Event Listeners ---
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            if (mode === 'player') {
+                player = new Point(x, y);
+                statusText.textContent = 'Player position set.';
+            } else if (mode === 'item') {
+                items.push(new Point(x, y));
+                statusText.textContent = `${items.length} items marked.`;
+            }
+            
+            if (isPathing) { // If pathing is active, immediately find new nearest item
+                findNearestItem();
+            }
+            draw();
+        });
+
+        setPlayerBtn.addEventListener('click', () => {
+            mode = 'player';
+            setPlayerBtn.classList.add('btn-active');
+            setItemBtn.classList.remove('btn-active');
+            statusText.textContent = 'Click on map to set player start position.';
+        });
+
+        setItemBtn.addEventListener('click', () => {
+            mode = 'item';
+            setItemBtn.classList.add('btn-active');
+            setPlayerBtn.classList.remove('btn-active');
+            statusText.textContent = 'Click on map to add event items.';
+        });
+        
+        togglePathBtn.addEventListener('click', () => {
+            if (isPathing) {
+                stopPathing();
+            } else {
+                if(player && items.length > 0) {
+                    startPathing();
+                } else {
+                    statusText.textContent = 'Set player and items first!';
+                }
+            }
+        });
+
+        clearAllBtn.addEventListener('click', () => {
+            stopPathing();
+            player = null;
+            items = [];
+            nearestItem = null;
+            nearestItemText.textContent = 'N/A';
+            statusText.textContent = 'All cleared. Set player position.';
+            draw();
+        });
+
+        // --- Initialization ---
+        window.addEventListener('resize', resizeCanvas);
+        
+        // Initial setup
+        resizeCanvas();
+        setPlayerBtn.classList.add('btn-active');
+        statusText.textContent = 'Click on map to set player start position.';
+    </script>
+</body>
+</html>
+1
